@@ -54,7 +54,42 @@ pub const PEParser = struct {
         try writer.writeAll("DOS Header:\n");
         try writer.writeAll("-----------\n\n");
 
-        try writer.print("Magic: 0x{X}\n", .{dos_header.e_magic});
-        try writer.print("File address of new exe header: 0x{X}\n", .{dos_header.e_lfanew});
+        try writer.print("  Magic number: 0x{X}\n", .{dos_header.e_magic});
+        try writer.print("  Bytes on last page of file: 0x{X}\n", .{dos_header.e_cblp});
+        try writer.print("  Pages in file: 0x{X}\n", .{dos_header.e_cp});
+        try writer.print("  Relocations: 0x{X}\n", .{dos_header.e_crlc});
+        try writer.print("  Size of header in paragraphs: 0x{X}\n", .{dos_header.e_cparhdr});
+        try writer.print("  Minimum extra paragraphs needed: 0x{X}\n", .{dos_header.e_minalloc});
+        try writer.print("  Maximum extra paragraphs needed: 0x{X}\n", .{dos_header.e_maxalloc});
+        try writer.print("  Initial (relative) SS value: 0x{X}\n", .{dos_header.e_ss});
+        try writer.print("  Initial SP value: 0x{X}\n", .{dos_header.e_sp});
+        try writer.print("  Checksum: 0x{X}\n", .{dos_header.e_csum});
+        try writer.print("  Initial IP value: 0x{X}\n", .{dos_header.e_ip});
+        try writer.print("  Initial (relative) CS value: 0x{X}\n", .{dos_header.e_cs});
+        try writer.print("  File address of relocation table: 0x{X}\n", .{dos_header.e_lfarlc});
+        try writer.print("  Overlay number: 0x{X}\n", .{dos_header.e_ovno});
+
+        try writer.writeAll("  Reserved words[4]: ");
+        for (dos_header.e_res, 0..) |item, index| {
+            try writer.print("0x{X}", .{item});
+            if (index < dos_header.e_res.len - 1) {
+                try writer.writeAll(", ");
+            }
+        }
+        try writer.writeAll("\n");
+
+        try writer.print("  OEM identifier: 0x{X}\n", .{dos_header.e_oemid});
+        try writer.print("  OEM information: 0x{X}\n", .{dos_header.e_oeminfo});
+
+        try writer.writeAll("  Reserved words[10]: ");
+        for (dos_header.e_res2, 0..) |item, index| {
+            try writer.print("0x{X}", .{item});
+            if (index < dos_header.e_res2.len - 1) {
+                try writer.writeAll(", ");
+            }
+        }
+        try writer.writeAll("\n");
+
+        try writer.print("  File address of new exe header: 0x{X}\n", .{dos_header.e_lfanew});
     }
 };
