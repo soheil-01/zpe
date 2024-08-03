@@ -15,6 +15,9 @@ pub const PEParser = struct {
     file: std.fs.File,
     dos_header: ?win32.IMAGE_DOS_HEADER = null,
     rich_header_entries: ?[]RICH_HEADER_ENTRY = null,
+    nt_headers_32: ?win32.IMAGE_NT_HEADERS32 = null,
+    nt_headers_64: ?win32.IMAGE_NT_HEADERS64 = null,
+    is_64bit: bool = false,
 
     // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
@@ -36,6 +39,7 @@ pub const PEParser = struct {
     pub fn parse(self: *Self) !void {
         try self.parseDOSHeader();
         try self.parseRichHeader();
+        try self.parseNTHeaders();
     }
 
     fn parseDOSHeader(self: *Self) !void {
@@ -104,10 +108,33 @@ pub const PEParser = struct {
         self.rich_header_entries = rich_header_entries;
     }
 
+    fn parseNTHeaders(self: *Self) !void {
+        assert(self.dos_header != null);
+
+        const e_lfanew = self.dos_header.?.e_lfanew;
+        try self.file.seekTo(@intCast(e_lfanew + @sizeOf(std.os.windows.DWORD) + @sizeOf(win32.IMAGE_FILE_HEADER)));
+
+        const reader = self.file.reader();
+
+        const optional_header_magic = try reader.readEnum(win32.IMAGE_OPTIONAL_HEADER_MAGIC, .little);
+        self.is_64bit = if (optional_header_magic == .NT_OPTIONAL_HDR_MAGIC) true else false;
+
+        try self.file.seekTo(@intCast(e_lfanew));
+
+        if (self.is_64bit) {
+            self.nt_headers_64 = try reader.readStruct(win32.IMAGE_NT_HEADERS64);
+        } else {
+            self.nt_headers_32 = try reader.readStruct(win32.IMAGE_NT_HEADERS32);
+        }
+    }
+
     pub fn print(self: Self, writer: anytype) !void {
         try self.printDOSHeaderInfo(writer);
         try writer.writeAll("\n");
         try self.printRichHeaderInfo(writer);
+        try writer.writeAll("\n");
+        try self.printNTHeadersInfo(writer);
+        try writer.writeAll("\n");
     }
 
     fn printDOSHeaderInfo(self: Self, writer: anytype) !void {
@@ -164,6 +191,130 @@ pub const PEParser = struct {
 
         for (rich_header_entries) |entry| {
             try writer.print(" 0x{X:0>4} 0x{X:0>4} 0x{X:0>8}: {d}.{d}.{d}\n", .{ entry.build_id, entry.product_id, entry.use_count, entry.build_id, entry.product_id, entry.use_count });
+        }
+    }
+
+    fn printNTHeadersInfo(self: Self, writer: anytype) !void {
+        try writer.writeAll("NT Headers:\n");
+        try writer.writeAll("------------\n\n");
+
+        if (self.is_64bit) {
+            try self.printNTHeaders64Info(writer);
+        } else {
+            try self.printNTHeaders32Info(writer);
+        }
+    }
+
+    fn printNTHeaders32Info(self: Self, writer: anytype) !void {
+        assert(self.nt_headers_32 != null);
+        const nt_headers = self.nt_headers_32.?;
+
+        try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
+
+        try writer.writeAll("\nFile Header:\n\n");
+        try writer.print("  Machine: {s} (0x{X})\n", .{ @tagName(nt_headers.FileHeader.Machine), @intFromEnum(nt_headers.FileHeader.Machine) });
+        try writer.print("  Number of sections: {}\n", .{nt_headers.FileHeader.NumberOfSections});
+        try writer.print("  Time date stamp: 0x{X}\n", .{nt_headers.FileHeader.TimeDateStamp});
+        try writer.print("  Pointer to symbol table: 0x{X}\n", .{nt_headers.FileHeader.PointerToSymbolTable});
+        try writer.print("  Number of symbols: {}\n", .{nt_headers.FileHeader.NumberOfSymbols});
+        try writer.print("  Size of optional header: {}\n", .{nt_headers.FileHeader.SizeOfOptionalHeader});
+        try writer.print("  Characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.FileHeader.Characteristics))});
+
+        try writer.writeAll("\nOptional Header:\n\n");
+        try writer.print("  Magic: 0x{X}\n", .{@intFromEnum(nt_headers.OptionalHeader.Magic)});
+        try writer.print("  Major linker version: {}\n", .{nt_headers.OptionalHeader.MajorLinkerVersion});
+        try writer.print("  Minor linker version: {}\n", .{nt_headers.OptionalHeader.MinorLinkerVersion});
+        try writer.print("  Size of code: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfCode});
+        try writer.print("  Size of initialized data: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfInitializedData});
+        try writer.print("  Size of uninitialized data: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfUninitializedData});
+        try writer.print("  Address of entry point: 0x{X}\n", .{nt_headers.OptionalHeader.AddressOfEntryPoint});
+        try writer.print("  Base of code: 0x{X}\n", .{nt_headers.OptionalHeader.BaseOfCode});
+        try writer.print("  Base of data: 0x{X}\n", .{nt_headers.OptionalHeader.BaseOfData});
+        try writer.print("  Image base: 0x{X}\n", .{nt_headers.OptionalHeader.ImageBase});
+        try writer.print("  Section alignment: 0x{X}\n", .{nt_headers.OptionalHeader.SectionAlignment});
+        try writer.print("  File alignment: 0x{X}\n", .{nt_headers.OptionalHeader.FileAlignment});
+        try writer.print("  Major operating system version: {}\n", .{nt_headers.OptionalHeader.MajorOperatingSystemVersion});
+        try writer.print("  Minor operating system version: {}\n", .{nt_headers.OptionalHeader.MinorOperatingSystemVersion});
+        try writer.print("  Major image version: {}\n", .{nt_headers.OptionalHeader.MajorImageVersion});
+        try writer.print("  Minor image version: {}\n", .{nt_headers.OptionalHeader.MinorImageVersion});
+        try writer.print("  Major subsystem version: {}\n", .{nt_headers.OptionalHeader.MajorSubsystemVersion});
+        try writer.print("  Minor subsystem version: {}\n", .{nt_headers.OptionalHeader.MinorSubsystemVersion});
+        try writer.print("  Win32 version value: 0x{X}\n", .{nt_headers.OptionalHeader.Win32VersionValue});
+        try writer.print("  Size of image: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfImage});
+        try writer.print("  Size of headers: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeaders});
+        try writer.print("  CheckSum: 0x{X}\n", .{nt_headers.OptionalHeader.CheckSum});
+        try writer.print("  Subsystem: {s} (0x{X})\n", .{ @tagName(nt_headers.OptionalHeader.Subsystem), @intFromEnum(nt_headers.OptionalHeader.Subsystem) });
+        try writer.print("  DLL characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.OptionalHeader.DllCharacteristics))});
+        try writer.print("  Size of stack reserve: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfStackReserve});
+        try writer.print("  Size of stack commit: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfStackCommit});
+        try writer.print("  Size of heap reserve: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeapReserve});
+        try writer.print("  Size of heap commit: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeapCommit});
+        try writer.print("  Loader flags: 0x{X}\n", .{nt_headers.OptionalHeader.LoaderFlags});
+        try writer.print("  Number of RVA and sizes: {}\n", .{nt_headers.OptionalHeader.NumberOfRvaAndSizes});
+
+        try writer.writeAll("\nData Directories:\n\n");
+        inline for (std.meta.fields(win32.IMAGE_DIRECTORY_ENTRY)) |entry| {
+            const data_directory = nt_headers.OptionalHeader.DataDirectory[entry.value];
+
+            try writer.print("\n    * {s} Directory:\n", .{entry.name});
+            try writer.print("      RVA: 0x{X}\n", .{data_directory.VirtualAddress});
+            try writer.print("      Size: 0x{X}\n", .{data_directory.Size});
+        }
+    }
+
+    fn printNTHeaders64Info(self: Self, writer: anytype) !void {
+        assert(self.nt_headers_64 != null);
+        const nt_headers = self.nt_headers_64.?;
+
+        try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
+
+        try writer.writeAll("\nFile Header:\n\n");
+        try writer.print("  Machine: {s} (0x{X})\n", .{ @tagName(nt_headers.FileHeader.Machine), @intFromEnum(nt_headers.FileHeader.Machine) });
+        try writer.print("  Number of sections: {}\n", .{nt_headers.FileHeader.NumberOfSections});
+        try writer.print("  Time date stamp: 0x{X}\n", .{nt_headers.FileHeader.TimeDateStamp});
+        try writer.print("  Pointer to symbol table: 0x{X}\n", .{nt_headers.FileHeader.PointerToSymbolTable});
+        try writer.print("  Number of symbols: {}\n", .{nt_headers.FileHeader.NumberOfSymbols});
+        try writer.print("  Size of optional header: {}\n", .{nt_headers.FileHeader.SizeOfOptionalHeader});
+        try writer.print("  Characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.FileHeader.Characteristics))});
+
+        try writer.writeAll("\nOptional Header:\n\n");
+        try writer.print("  Magic: 0x{X}\n", .{@intFromEnum(nt_headers.OptionalHeader.Magic)});
+        try writer.print("  Major linker version: {}\n", .{nt_headers.OptionalHeader.MajorLinkerVersion});
+        try writer.print("  Minor linker version: {}\n", .{nt_headers.OptionalHeader.MinorLinkerVersion});
+        try writer.print("  Size of code: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfCode});
+        try writer.print("  Size of initialized data: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfInitializedData});
+        try writer.print("  Size of uninitialized data: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfUninitializedData});
+        try writer.print("  Address of entry point: 0x{X}\n", .{nt_headers.OptionalHeader.AddressOfEntryPoint});
+        try writer.print("  Base of code: 0x{X}\n", .{nt_headers.OptionalHeader.BaseOfCode});
+        try writer.print("  Image base: 0x{X}\n", .{nt_headers.OptionalHeader.ImageBase});
+        try writer.print("  Section alignment: 0x{X}\n", .{nt_headers.OptionalHeader.SectionAlignment});
+        try writer.print("  File alignment: 0x{X}\n", .{nt_headers.OptionalHeader.FileAlignment});
+        try writer.print("  Major operating system version: {}\n", .{nt_headers.OptionalHeader.MajorOperatingSystemVersion});
+        try writer.print("  Minor operating system version: {}\n", .{nt_headers.OptionalHeader.MinorOperatingSystemVersion});
+        try writer.print("  Major image version: {}\n", .{nt_headers.OptionalHeader.MajorImageVersion});
+        try writer.print("  Minor image version: {}\n", .{nt_headers.OptionalHeader.MinorImageVersion});
+        try writer.print("  Major subsystem version: {}\n", .{nt_headers.OptionalHeader.MajorSubsystemVersion});
+        try writer.print("  Minor subsystem version: {}\n", .{nt_headers.OptionalHeader.MinorSubsystemVersion});
+        try writer.print("  Win32 version value: 0x{X}\n", .{nt_headers.OptionalHeader.Win32VersionValue});
+        try writer.print("  Size of image: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfImage});
+        try writer.print("  Size of headers: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeaders});
+        try writer.print("  CheckSum: 0x{X}\n", .{nt_headers.OptionalHeader.CheckSum});
+        try writer.print("  Subsystem: {s} (0x{X})\n", .{ @tagName(nt_headers.OptionalHeader.Subsystem), @intFromEnum(nt_headers.OptionalHeader.Subsystem) });
+        try writer.print("  DLL characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.OptionalHeader.DllCharacteristics))});
+        try writer.print("  Size of stack reserve: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfStackReserve});
+        try writer.print("  Size of stack commit: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfStackCommit});
+        try writer.print("  Size of heap reserve: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeapReserve});
+        try writer.print("  Size of heap commit: 0x{X}\n", .{nt_headers.OptionalHeader.SizeOfHeapCommit});
+        try writer.print("  Loader flags: 0x{X}\n", .{nt_headers.OptionalHeader.LoaderFlags});
+        try writer.print("  Number of RVA and sizes: {}\n", .{nt_headers.OptionalHeader.NumberOfRvaAndSizes});
+
+        try writer.writeAll("\nData Directories:\n\n");
+        inline for (std.meta.fields(win32.IMAGE_DIRECTORY_ENTRY)) |entry| {
+            const data_directory = nt_headers.OptionalHeader.DataDirectory[entry.value];
+
+            try writer.print("\n      * {s} Directory:\n", .{entry.name});
+            try writer.print("          RVA: 0x{X}\n", .{data_directory.VirtualAddress});
+            try writer.print("          Size: 0x{X}\n", .{data_directory.Size});
         }
     }
 };
