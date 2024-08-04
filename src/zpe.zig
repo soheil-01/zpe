@@ -1,5 +1,6 @@
 const std = @import("std");
 const win32 = @import("zigwin32").everything;
+const datetime = @import("zig-datetime").datetime;
 const assert = std.debug.assert;
 
 pub const PEParser = struct {
@@ -214,11 +215,22 @@ pub const PEParser = struct {
         try writer.writeAll("\nFile Header:\n\n");
         try writer.print("  Machine: {s} (0x{X})\n", .{ @tagName(nt_headers.FileHeader.Machine), @intFromEnum(nt_headers.FileHeader.Machine) });
         try writer.print("  Number of sections: {}\n", .{nt_headers.FileHeader.NumberOfSections});
-        try writer.print("  Time date stamp: 0x{X}\n", .{nt_headers.FileHeader.TimeDateStamp});
+
+        const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(nt_headers.FileHeader.TimeDateStamp)).formatHttp(self.allocator);
+        defer self.allocator.free(time_date_string);
+        try writer.print("  Time date stamp: 0x{X} ({s})\n", .{ nt_headers.FileHeader.TimeDateStamp, time_date_string });
+
         try writer.print("  Pointer to symbol table: 0x{X}\n", .{nt_headers.FileHeader.PointerToSymbolTable});
         try writer.print("  Number of symbols: {}\n", .{nt_headers.FileHeader.NumberOfSymbols});
         try writer.print("  Size of optional header: {}\n", .{nt_headers.FileHeader.SizeOfOptionalHeader});
+
         try writer.print("  Characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.FileHeader.Characteristics))});
+        inline for (std.meta.fields(win32.IMAGE_FILE_CHARACTERISTICS)) |field| {
+            const value = @field(nt_headers.FileHeader.Characteristics, field.name);
+            if (field.name[0] != '_' and value == 1) {
+                try writer.print("      {s}\n", .{field.name});
+            }
+        }
 
         try writer.writeAll("\nOptional Header:\n\n");
         try writer.print("  Magic: 0x{X}\n", .{@intFromEnum(nt_headers.OptionalHeader.Magic)});
@@ -271,11 +283,22 @@ pub const PEParser = struct {
         try writer.writeAll("\nFile Header:\n\n");
         try writer.print("  Machine: {s} (0x{X})\n", .{ @tagName(nt_headers.FileHeader.Machine), @intFromEnum(nt_headers.FileHeader.Machine) });
         try writer.print("  Number of sections: {}\n", .{nt_headers.FileHeader.NumberOfSections});
-        try writer.print("  Time date stamp: 0x{X}\n", .{nt_headers.FileHeader.TimeDateStamp});
+
+        const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(nt_headers.FileHeader.TimeDateStamp)).formatHttp(self.allocator);
+        defer self.allocator.free(time_date_string);
+        try writer.print("  Time date stamp: 0x{X} ({s})\n", .{ nt_headers.FileHeader.TimeDateStamp, time_date_string });
+
         try writer.print("  Pointer to symbol table: 0x{X}\n", .{nt_headers.FileHeader.PointerToSymbolTable});
         try writer.print("  Number of symbols: {}\n", .{nt_headers.FileHeader.NumberOfSymbols});
         try writer.print("  Size of optional header: {}\n", .{nt_headers.FileHeader.SizeOfOptionalHeader});
+
         try writer.print("  Characteristics: 0x{X}\n", .{@as(u16, @bitCast(nt_headers.FileHeader.Characteristics))});
+        inline for (std.meta.fields(win32.IMAGE_FILE_CHARACTERISTICS)) |field| {
+            const value = @field(nt_headers.FileHeader.Characteristics, field.name);
+            if (field.name[0] != '_' and value == 1) {
+                try writer.print("      {s}\n", .{field.name});
+            }
+        }
 
         try writer.writeAll("\nOptional Header:\n\n");
         try writer.print("  Magic: 0x{X}\n", .{@intFromEnum(nt_headers.OptionalHeader.Magic)});

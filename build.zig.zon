@@ -13,6 +13,10 @@
             .url = "git+https://github.com/marlersoft/zigwin32#main",
             .hash = "1220cc9c9028e20f4ec2ece1155ae3479acc1cc509f9ab93acb74e8f5bbf8eefd2a9",
         },
+        .@"zig-datetime" = .{
+            .url = "git+https://github.com/frmdstryr/zig-datetime?ref=master#70aebf28fb3e137cd84123a9349d157a74708721",
+            .hash = "122077215ce36e125a490e59ec1748ffd4f6ba00d4d14f7308978e5360711d72d77f",
+        },
     },
     .paths = .{
         "build.zig",
