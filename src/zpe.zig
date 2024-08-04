@@ -13,6 +13,7 @@ pub const PEParser = struct {
     nt_headers_32: ?types.IMAGE_NT_HEADERS32 = null,
     nt_headers_64: ?types.IMAGE_NT_HEADERS64 = null,
     is_64bit: bool = false,
+    section_headers: ?[]types.IMAGE_SECTION_HEADER = null,
 
     // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
@@ -29,12 +30,14 @@ pub const PEParser = struct {
     pub fn deinit(self: Self) void {
         self.file.close();
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
+        if (self.section_headers) |section_headers| self.allocator.free(section_headers);
     }
 
     pub fn parse(self: *Self) !void {
         try self.parseDOSHeader();
         try self.parseRichHeader();
         try self.parseNTHeaders();
+        try self.parseSectionHeaders();
     }
 
     fn parseDOSHeader(self: *Self) !void {
@@ -123,6 +126,37 @@ pub const PEParser = struct {
         }
     }
 
+    fn parseSectionHeaders(self: *Self) !void {
+        assert(self.dos_header != null);
+        assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
+
+        const reader = self.file.reader();
+
+        const e_lfanew: usize = @intCast(self.dos_header.?.e_lfanew);
+
+        var file_header: types.IMAGE_FILE_HEADER = undefined;
+        var nt_headers_size: usize = 0;
+
+        if (self.is_64bit) {
+            file_header = self.nt_headers_64.?.FileHeader;
+            nt_headers_size = @sizeOf(types.IMAGE_NT_HEADERS64);
+        } else {
+            file_header = self.nt_headers_32.?.FileHeader;
+            nt_headers_size = @sizeOf(types.IMAGE_NT_HEADERS32);
+        }
+
+        var section_headers = try self.allocator.alloc(types.IMAGE_SECTION_HEADER, file_header.NumberOfSections);
+
+        try self.file.seekTo(e_lfanew + nt_headers_size);
+
+        for (0..file_header.NumberOfSections) |section_index| {
+            const section_header = try reader.readStruct(types.IMAGE_SECTION_HEADER);
+            section_headers[section_index] = section_header;
+        }
+
+        self.section_headers = section_headers;
+    }
+
     pub fn print(self: Self, writer: anytype) !void {
         try self.printDOSHeaderInfo(writer);
         try writer.writeAll("\n");
@@ -130,11 +164,12 @@ pub const PEParser = struct {
         try writer.writeAll("\n");
         try self.printNTHeadersInfo(writer);
         try writer.writeAll("\n");
+        try self.printSectionHeadersInfo(writer);
+        try writer.writeAll("\n");
     }
 
     fn printDOSHeaderInfo(self: Self, writer: anytype) !void {
-        assert(self.dos_header != null);
-        const dos_header = self.dos_header.?;
+        const dos_header = self.dos_header orelse return;
 
         try writer.writeAll("DOS Header:\n");
         try writer.writeAll("-----------\n\n");
@@ -201,8 +236,7 @@ pub const PEParser = struct {
     }
 
     fn printNTHeaders32Info(self: Self, writer: anytype) !void {
-        assert(self.nt_headers_32 != null);
-        const nt_headers = self.nt_headers_32.?;
+        const nt_headers = self.nt_headers_32 orelse return;
 
         try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
 
@@ -211,8 +245,7 @@ pub const PEParser = struct {
     }
 
     fn printNTHeaders64Info(self: Self, writer: anytype) !void {
-        assert(self.nt_headers_64 != null);
-        const nt_headers = self.nt_headers_64.?;
+        const nt_headers = self.nt_headers_64 orelse return;
 
         try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
 
@@ -292,6 +325,35 @@ pub const PEParser = struct {
             try writer.print("\n      * {s} Directory:\n", .{entry.name});
             try writer.print("          RVA: 0x{X}\n", .{data_directory.VirtualAddress});
             try writer.print("          Size: 0x{X}\n", .{data_directory.Size});
+        }
+    }
+
+    fn printSectionHeadersInfo(self: Self, writer: anytype) !void {
+        const section_headers = self.section_headers orelse return;
+
+        try writer.writeAll("Section Headers:\n");
+        try writer.writeAll("----------------\n\n");
+
+        for (section_headers) |section| {
+            try writer.print("  * {s}\n", .{section.Name});
+            try writer.print("      Virtual Size: 0x{X}\n", .{section.Misc.VirtualSize});
+            try writer.print("      Virtual Address: 0x{X}\n", .{section.VirtualAddress});
+            try writer.print("      Size of Raw Data: 0x{X}\n", .{section.SizeOfRawData});
+            try writer.print("      Pointer to Raw Data: 0x{X}\n", .{section.PointerToRawData});
+            try writer.print("      Pointer to Relocations: 0x{X}\n", .{section.PointerToRelocations});
+            try writer.print("      Pointer to Line Numbers: 0x{X}\n", .{section.PointerToLinenumbers});
+            try writer.print("      Number of Relocations: {d}\n", .{section.NumberOfRelocations});
+            try writer.print("      Number of Line Numbers: {d}\n", .{section.NumberOfLinenumbers});
+
+            try writer.print("      Characteristics: 0x{X}\n", .{@as(u32, @bitCast(section.Characteristics))});
+            inline for (std.meta.fields(types.IMAGE_SECTION_CHARACTERISTICS)) |field| {
+                const value = @field(section.Characteristics, field.name);
+                if (field.name[0] != '_' and value == 1) {
+                    try writer.print("          {s}\n", .{field.name});
+                }
+            }
+
+            try writer.writeAll("\n");
         }
     }
 };

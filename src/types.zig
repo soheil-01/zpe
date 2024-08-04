@@ -244,3 +244,56 @@ pub const IMAGE_OPTIONAL_HEADER64 = extern struct {
     NumberOfRvaAndSizes: u32,
     DataDirectory: [16]IMAGE_DATA_DIRECTORY,
 };
+
+pub const IMAGE_SECTION_CHARACTERISTICS = packed struct(u32) {
+    SCALE_INDEX: u1 = 0,
+    _1: u1 = 0,
+    _2: u1 = 0,
+    TYPE_NO_PAD: u1 = 0,
+    _4: u1 = 0,
+    CNT_CODE: u1 = 0,
+    CNT_INITIALIZED_DATA: u1 = 0,
+    CNT_UNINITIALIZED_DATA: u1 = 0,
+    LNK_OTHER: u1 = 0,
+    LNK_INFO: u1 = 0,
+    _10: u1 = 0,
+    LNK_REMOVE: u1 = 0,
+    LNK_COMDAT: u1 = 0,
+    _13: u1 = 0,
+    NO_DEFER_SPEC_EXC: u1 = 0,
+    GPREL: u1 = 0,
+    _16: u1 = 0,
+    MEM_PURGEABLE: u1 = 0,
+    MEM_LOCKED: u1 = 0,
+    MEM_PRELOAD: u1 = 0,
+    ALIGN_1BYTES: u1 = 0,
+    ALIGN_2BYTES: u1 = 0,
+    ALIGN_8BYTES: u1 = 0,
+    ALIGN_128BYTES: u1 = 0,
+    LNK_NRELOC_OVFL: u1 = 0,
+    MEM_DISCARDABLE: u1 = 0,
+    MEM_NOT_CACHED: u1 = 0,
+    MEM_NOT_PAGED: u1 = 0,
+    MEM_SHARED: u1 = 0,
+    MEM_EXECUTE: u1 = 0,
+    MEM_READ: u1 = 0,
+    MEM_WRITE: u1 = 0,
+    // MEM_FARDATA (bit index 15) conflicts with GPREL
+    // MEM_16BIT (bit index 17) conflicts with MEM_PURGEABLE
+};
+
+pub const IMAGE_SECTION_HEADER = extern struct {
+    Name: [8]u8,
+    Misc: extern union {
+        PhysicalAddress: u32,
+        VirtualSize: u32,
+    },
+    VirtualAddress: u32,
+    SizeOfRawData: u32,
+    PointerToRawData: u32,
+    PointerToRelocations: u32,
+    PointerToLinenumbers: u32,
+    NumberOfRelocations: u16,
+    NumberOfLinenumbers: u16,
+    Characteristics: IMAGE_SECTION_CHARACTERISTICS,
+};
