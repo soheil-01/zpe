@@ -15,7 +15,6 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zigwin32_module = b.dependency("zigwin32", .{}).module("zigwin32");
     const zigdatetime_module = b.dependency("zig-datetime", .{}).module("zig-datetime");
 
     const lib = b.addStaticLibrary(.{
@@ -35,7 +34,6 @@ pub fn build(b: *std.Build) void {
     const module = b.addModule("zpe", .{
         .root_source_file = b.path("src/zpe.zig"),
         .imports = &.{
-            .{ .name = "zigwin32", .module = zigwin32_module },
             .{ .name = "zig-datetime", .module = zigdatetime_module },
         },
     });
@@ -47,7 +45,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("zpe", module);
-    exe.root_module.addImport("zigwin32", zigwin32_module);
     exe.root_module.addImport("zig-datetime", zigdatetime_module);
 
     // This declares intent for the executable to be installed into the
