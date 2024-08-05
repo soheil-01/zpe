@@ -297,3 +297,31 @@ pub const IMAGE_SECTION_HEADER = extern struct {
     NumberOfLinenumbers: u16,
     Characteristics: IMAGE_SECTION_CHARACTERISTICS,
 };
+
+pub const IMAGE_IMPORT_DESCRIPTOR = extern struct {
+    Anonymous: extern union {
+        Characteristics: u32,
+        OriginalFirstThunk: u32,
+    },
+    TimeDateStamp: u32,
+    ForwarderChain: u32,
+    Name: u32,
+    FirstThunk: u32,
+};
+
+pub const ILT_ENTRY32 = packed struct(u32) {
+    Anonymous: packed union {
+        Ordinal: u16,
+        HintNameTableRVA: u31,
+    },
+    OrdinalNameFlag: u1,
+};
+
+pub const ILT_ENTRY64 = packed struct(u64) {
+    Anonymous: packed union {
+        Ordinal: u16,
+        HintNameTableRVA: u31,
+    },
+    _1: u32,
+    OrdinalNameFlag: u1,
+};

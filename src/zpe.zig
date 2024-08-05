@@ -14,6 +14,7 @@ pub const PEParser = struct {
     nt_headers_64: ?types.IMAGE_NT_HEADERS64 = null,
     is_64bit: bool = false,
     section_headers: ?[]types.IMAGE_SECTION_HEADER = null,
+    import_table: ?[]types.IMAGE_IMPORT_DESCRIPTOR = null,
 
     // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
@@ -31,6 +32,7 @@ pub const PEParser = struct {
         self.file.close();
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
         if (self.section_headers) |section_headers| self.allocator.free(section_headers);
+        if (self.import_table) |import_table| self.allocator.free(import_table);
     }
 
     pub fn parse(self: *Self) !void {
@@ -38,6 +40,7 @@ pub const PEParser = struct {
         try self.parseRichHeader();
         try self.parseNTHeaders();
         try self.parseSectionHeaders();
+        try self.parseImportDirectory();
     }
 
     fn parseDOSHeader(self: *Self) !void {
@@ -157,6 +160,40 @@ pub const PEParser = struct {
         self.section_headers = section_headers;
     }
 
+    fn rvaToFileOffset(self: Self, rva: u32) !u32 {
+        const section_headers = self.section_headers orelse return error.SectionHeadersNotParsed;
+
+        for (section_headers) |section| {
+            if (rva >= section.VirtualAddress and rva < section.VirtualAddress + section.Misc.VirtualSize) {
+                return (rva - section.VirtualAddress) + section.PointerToRawData;
+            }
+        }
+
+        return error.RVANotFound;
+    }
+
+    fn parseImportDirectory(self: *Self) !void {
+        assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
+
+        const IMAGE_DIRECTORY_ENTRY_IMPORT = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.IMPORT);
+        const import_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+        const import_directory_address = try self.rvaToFileOffset(import_directory_va);
+
+        var import_table = std.ArrayList(types.IMAGE_IMPORT_DESCRIPTOR).init(self.allocator);
+
+        try self.file.seekTo(import_directory_address);
+        const reader = self.file.reader();
+
+        while (true) {
+            const import_descriptor = try reader.readStruct(types.IMAGE_IMPORT_DESCRIPTOR);
+
+            if (import_descriptor.Name == 0 and import_descriptor.FirstThunk == 0) break;
+            try import_table.append(import_descriptor);
+        }
+
+        self.import_table = try import_table.toOwnedSlice();
+    }
+
     pub fn print(self: Self, writer: anytype) !void {
         try self.printDOSHeaderInfo(writer);
         try writer.writeAll("\n");
@@ -165,6 +202,8 @@ pub const PEParser = struct {
         try self.printNTHeadersInfo(writer);
         try writer.writeAll("\n");
         try self.printSectionHeadersInfo(writer);
+        try writer.writeAll("\n");
+        try self.printImportTableInfo(writer);
         try writer.writeAll("\n");
     }
 
@@ -354,6 +393,74 @@ pub const PEParser = struct {
             }
 
             try writer.writeAll("\n");
+        }
+    }
+
+    fn printImportTableInfo(self: Self, writer: anytype) !void {
+        const import_table = self.import_table orelse return;
+
+        try writer.writeAll("IMPORT TABLE:\n");
+        try writer.writeAll("--------------\n\n");
+
+        const reader = self.file.reader();
+
+        for (import_table) |import_descriptor| {
+            const name_addr = try self.rvaToFileOffset(import_descriptor.Name);
+            try self.file.seekTo(name_addr);
+
+            const name = try reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+            defer self.allocator.free(name);
+
+            try writer.print("  * {s}:\n", .{name});
+
+            try writer.print("      ILT RVA: 0x{X}\n", .{import_descriptor.Anonymous.OriginalFirstThunk});
+            try writer.print("      IAT RVA: 0x{X}\n", .{import_descriptor.FirstThunk});
+            try writer.print("      Bound: {}\n", .{import_descriptor.TimeDateStamp != 0});
+
+            const ilt_addr = try self.rvaToFileOffset(import_descriptor.Anonymous.OriginalFirstThunk);
+
+            var index: usize = 0;
+            while (true) : (index += 1) {
+                const entry_size: usize = if (self.is_64bit) @sizeOf(types.ILT_ENTRY64) else @sizeOf(types.ILT_ENTRY32);
+
+                try self.file.seekTo(ilt_addr + entry_size * index);
+
+                var flag: u1 = 0;
+                var ordinal: u16 = 0;
+                var hint_rva: u31 = 0;
+
+                if (self.is_64bit) {
+                    const entry = try reader.readStruct(types.ILT_ENTRY64);
+                    flag = entry.OrdinalNameFlag;
+                    ordinal = entry.Anonymous.Ordinal;
+                    hint_rva = entry.Anonymous.HintNameTableRVA;
+                } else {
+                    const entry = try reader.readStruct(types.ILT_ENTRY32);
+                    flag = entry.OrdinalNameFlag;
+                    ordinal = entry.Anonymous.Ordinal;
+                    hint_rva = entry.Anonymous.HintNameTableRVA;
+                }
+
+                if (flag == 0 and hint_rva == 0 and ordinal == 0) break;
+
+                try writer.writeAll("\n     Entry:\n");
+                if (flag == 0) {
+                    const hint_addr = try self.rvaToFileOffset(hint_rva);
+                    try self.file.seekTo(hint_addr);
+
+                    const hint = try reader.readInt(u16, .little);
+                    const entry_name = try reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+                    defer self.allocator.free(entry_name);
+
+                    try writer.print("          Name: {s}\n", .{entry_name});
+                    try writer.print("          Hint RVA: 0x{X}\n", .{hint_rva});
+                    try writer.print("          Hint: 0x{X}\n", .{hint});
+                } else {
+                    try writer.print("          Ordinal: 0x{X}\n", .{ordinal});
+                }
+            }
+
+            try writer.writeAll("\n   ----------------------\n\n");
         }
     }
 };
