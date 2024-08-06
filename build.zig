@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zigdatetime_module = b.dependency("zig-datetime", .{}).module("zig-datetime");
+    const clap_module = b.dependency("clap", .{}).module("clap");
 
     const lib = b.addStaticLibrary(.{
         .name = "zpe",
@@ -35,6 +36,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/zpe.zig"),
         .imports = &.{
             .{ .name = "zig-datetime", .module = zigdatetime_module },
+            .{ .name = "clap", .module = clap_module },
         },
     });
 
@@ -46,6 +48,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("zpe", module);
     exe.root_module.addImport("zig-datetime", zigdatetime_module);
+    exe.root_module.addImport("clap", clap_module);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

@@ -1,14 +1,12 @@
+// Note: Most of these types are copied from the zigwin32 library (https://github.com/marlersoft/zigwin32)
+// due to alignment issues in the original library and to improve ZLS performance by avoiding
+// the inclusion of the entire library. Modifications have been made to correct alignment problems.
+
 pub const RICH_HEADER_ENTRY = struct {
     build_id: u16,
     product_id: u16,
     use_count: u32,
 };
-
-// Note: These types are copied from the zigwin32 library (https://github.com/marlersoft/zigwin32)
-// due to alignment issues in the original library and to improve ZLS performance by avoiding
-// the inclusion of the entire library. Modifications have been made to correct alignment problems.
-
-pub const IMAGE_DOS_SIGNATURE = @as(u16, 23117);
 
 pub const IMAGE_DIRECTORY_ENTRY = enum(u32) {
     ARCHITECTURE = 7,

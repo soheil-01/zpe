@@ -53,8 +53,10 @@ pub const PEParser = struct {
         // TODO: keep the file.reader() as the struct member
         const reader = self.file.reader();
 
+        const IMAGE_DOS_SIGNATURE = 0x5A4D;
+
         const dos_header = try reader.readStruct(types.IMAGE_DOS_HEADER);
-        if (dos_header.e_magic != types.IMAGE_DOS_SIGNATURE) return error.InvalidDOSHeaderMagic;
+        if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return error.InvalidDOSHeaderMagic;
 
         self.dos_header = dos_header;
     }
