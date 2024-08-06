@@ -310,18 +310,28 @@ pub const IMAGE_IMPORT_DESCRIPTOR = extern struct {
 };
 
 pub const ILT_ENTRY32 = packed struct(u32) {
-    Anonymous: packed union {
-        Ordinal: u16,
-        HintNameTableRVA: u31,
+    ANONYMOUS: packed union {
+        ORDINAL: u16,
+        HINT_NAME_TABLE_RVA: u31,
     },
-    OrdinalNameFlag: u1,
+    ORDINAL_NAME_FLAG: u1,
 };
 
 pub const ILT_ENTRY64 = packed struct(u64) {
-    Anonymous: packed union {
-        Ordinal: u16,
-        HintNameTableRVA: u31,
+    ANONYMOUS: packed union {
+        ORDINAL: u16,
+        HINT_NAME_TABLE_RVA: u31,
     },
     _1: u32,
-    OrdinalNameFlag: u1,
+    ORDINAL_NAME_FLAG: u1,
+};
+
+pub const IMAGE_BASE_RELOCATION = extern struct {
+    VirtualAddress: u32,
+    SizeOfBlock: u32,
+};
+
+pub const BASE_RELOC_ENTRY = packed struct(u16) {
+    OFFSET: u12,
+    TYPE: u4,
 };

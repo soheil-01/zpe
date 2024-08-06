@@ -1,5 +1,5 @@
 const std = @import("std");
-const types = @import("types.zig");
+pub const types = @import("types.zig");
 const datetime = @import("zig-datetime").datetime;
 const assert = std.debug.assert;
 
@@ -15,6 +15,7 @@ pub const PEParser = struct {
     is_64bit: bool = false,
     section_headers: ?[]types.IMAGE_SECTION_HEADER = null,
     import_table: ?[]types.IMAGE_IMPORT_DESCRIPTOR = null,
+    basereloc_table: ?[]types.IMAGE_BASE_RELOCATION = null,
 
     // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
@@ -33,6 +34,7 @@ pub const PEParser = struct {
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
         if (self.section_headers) |section_headers| self.allocator.free(section_headers);
         if (self.import_table) |import_table| self.allocator.free(import_table);
+        if (self.basereloc_table) |basereloc_table| self.allocator.free(basereloc_table);
     }
 
     pub fn parse(self: *Self) !void {
@@ -41,6 +43,7 @@ pub const PEParser = struct {
         try self.parseNTHeaders();
         try self.parseSectionHeaders();
         try self.parseImportDirectory();
+        try self.parseBaseRelocation();
     }
 
     fn parseDOSHeader(self: *Self) !void {
@@ -160,18 +163,6 @@ pub const PEParser = struct {
         self.section_headers = section_headers;
     }
 
-    fn rvaToFileOffset(self: Self, rva: u32) !u32 {
-        const section_headers = self.section_headers orelse return error.SectionHeadersNotParsed;
-
-        for (section_headers) |section| {
-            if (rva >= section.VirtualAddress and rva < section.VirtualAddress + section.Misc.VirtualSize) {
-                return (rva - section.VirtualAddress) + section.PointerToRawData;
-            }
-        }
-
-        return error.RVANotFound;
-    }
-
     fn parseImportDirectory(self: *Self) !void {
         assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
 
@@ -180,6 +171,7 @@ pub const PEParser = struct {
         const import_directory_address = try self.rvaToFileOffset(import_directory_va);
 
         var import_table = std.ArrayList(types.IMAGE_IMPORT_DESCRIPTOR).init(self.allocator);
+        errdefer import_table.deinit();
 
         try self.file.seekTo(import_directory_address);
         const reader = self.file.reader();
@@ -194,6 +186,43 @@ pub const PEParser = struct {
         self.import_table = try import_table.toOwnedSlice();
     }
 
+    fn parseBaseRelocation(self: *Self) !void {
+        assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
+
+        const IMAGE_DIRECTORY_ENTRY_BASERELOC = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.BASERELOC);
+        const basereloc_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+        const basereloc_directory_address = try self.rvaToFileOffset(basereloc_directory_va);
+
+        var basereloc_table = std.ArrayList(types.IMAGE_BASE_RELOCATION).init(self.allocator);
+        errdefer basereloc_table.deinit();
+
+        try self.file.seekTo(basereloc_directory_address);
+        const reader = self.file.reader();
+
+        while (true) {
+            const base_relocation = try reader.readStruct(types.IMAGE_BASE_RELOCATION);
+
+            if (base_relocation.VirtualAddress == 0 and base_relocation.SizeOfBlock == 0) break;
+
+            try basereloc_table.append(base_relocation);
+            try reader.skipBytes(base_relocation.SizeOfBlock - @sizeOf(types.IMAGE_BASE_RELOCATION), .{});
+        }
+
+        self.basereloc_table = try basereloc_table.toOwnedSlice();
+    }
+
+    fn rvaToFileOffset(self: Self, rva: u32) !u32 {
+        const section_headers = self.section_headers orelse return error.SectionHeadersNotParsed;
+
+        for (section_headers) |section| {
+            if (rva >= section.VirtualAddress and rva < section.VirtualAddress + section.Misc.VirtualSize) {
+                return (rva - section.VirtualAddress) + section.PointerToRawData;
+            }
+        }
+
+        return error.RVANotFound;
+    }
+
     pub fn print(self: Self, writer: anytype) !void {
         try self.printDOSHeaderInfo(writer);
         try writer.writeAll("\n");
@@ -204,6 +233,8 @@ pub const PEParser = struct {
         try self.printSectionHeadersInfo(writer);
         try writer.writeAll("\n");
         try self.printImportTableInfo(writer);
+        try writer.writeAll("\n");
+        try self.printBaseRelocationInfo(writer);
         try writer.writeAll("\n");
     }
 
@@ -431,14 +462,14 @@ pub const PEParser = struct {
 
                 if (self.is_64bit) {
                     const entry = try reader.readStruct(types.ILT_ENTRY64);
-                    flag = entry.OrdinalNameFlag;
-                    ordinal = entry.Anonymous.Ordinal;
-                    hint_rva = entry.Anonymous.HintNameTableRVA;
+                    flag = entry.ORDINAL_NAME_FLAG;
+                    ordinal = entry.ANONYMOUS.ORDINAL;
+                    hint_rva = entry.ANONYMOUS.HINT_NAME_TABLE_RVA;
                 } else {
                     const entry = try reader.readStruct(types.ILT_ENTRY32);
-                    flag = entry.OrdinalNameFlag;
-                    ordinal = entry.Anonymous.Ordinal;
-                    hint_rva = entry.Anonymous.HintNameTableRVA;
+                    flag = entry.ORDINAL_NAME_FLAG;
+                    ordinal = entry.ANONYMOUS.ORDINAL;
+                    hint_rva = entry.ANONYMOUS.HINT_NAME_TABLE_RVA;
                 }
 
                 if (flag == 0 and hint_rva == 0 and ordinal == 0) break;
@@ -458,6 +489,43 @@ pub const PEParser = struct {
                 } else {
                     try writer.print("          Ordinal: 0x{X}\n", .{ordinal});
                 }
+            }
+
+            try writer.writeAll("\n   ----------------------\n\n");
+        }
+    }
+
+    fn printBaseRelocationInfo(self: Self, writer: anytype) !void {
+        const basereloc_table = self.basereloc_table orelse return;
+
+        const IMAGE_DIRECTORY_ENTRY_BASERELOC = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.BASERELOC);
+        const basereloc_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+        const basereloc_directory_address = try self.rvaToFileOffset(basereloc_directory_va);
+
+        try writer.writeAll("BASE RELOCATION TABLE:\n");
+        try writer.writeAll("----------------------\n\n");
+
+        try self.file.seekTo(basereloc_directory_address);
+        const reader = self.file.reader();
+
+        for (basereloc_table, 0..) |base_relocation, i| {
+            const page_rva = base_relocation.VirtualAddress;
+            const block_size = base_relocation.SizeOfBlock;
+            const entries_len = (block_size - @sizeOf(types.IMAGE_BASE_RELOCATION)) / @sizeOf(types.BASE_RELOC_ENTRY);
+
+            try writer.print("\n    Block: 0x{X}: \n", .{i});
+            try writer.print("      Page RVA: 0x{X}\n", .{page_rva});
+            try writer.print("      Block size: 0x{X}\n", .{block_size});
+            try writer.print("      Number of entries: 0x{X}\n", .{entries_len});
+            try writer.writeAll("\n    Entries:\n");
+
+            try reader.skipBytes(@sizeOf(types.IMAGE_BASE_RELOCATION), .{});
+            for (0..entries_len) |_| {
+                const entry = try reader.readStruct(types.BASE_RELOC_ENTRY);
+
+                try writer.print("\n        * Value: 0x{X}\n", .{@as(u16, @bitCast(entry))});
+                try writer.print("          Relocation Type: 0x{X}\n", .{entry.TYPE});
+                try writer.print("          Offset: 0x{X}\n", .{entry.OFFSET});
             }
 
             try writer.writeAll("\n   ----------------------\n\n");
