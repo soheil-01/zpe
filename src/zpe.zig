@@ -14,8 +14,8 @@ pub const PEParser = struct {
     nt_headers_64: ?types.IMAGE_NT_HEADERS64 = null,
     is_64bit: bool = false,
     section_headers: ?[]types.IMAGE_SECTION_HEADER = null,
-    import_directory: std.StringHashMap(types.IMPORTED_DLL),
-    basereloc_table: ?[]types.IMAGE_BASE_RELOCATION = null,
+    import_directory: ?[]types.IMPORTED_DLL = null,
+    base_relocation_directory: ?[]types.BASE_RELOCATION_BLOCK = null,
 
     // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
@@ -26,7 +26,6 @@ pub const PEParser = struct {
         return .{
             .allocator = allocator,
             .file = file,
-            .import_directory = std.StringHashMap(types.IMPORTED_DLL).init(allocator),
         };
     }
 
@@ -35,17 +34,19 @@ pub const PEParser = struct {
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
         if (self.section_headers) |section_headers| self.allocator.free(section_headers);
 
-        var import_directory_iter = self.import_directory.iterator();
-        while (import_directory_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-
-            const functions = entry.value_ptr.Functions;
-            for (functions.items) |function| if (function.Name) |name| self.allocator.free(name);
-            functions.deinit();
+        if (self.import_directory) |import_directory| {
+            for (import_directory) |imported_dll| {
+                self.allocator.free(imported_dll.Name);
+                for (imported_dll.Functions) |function| if (function.Name) |name| self.allocator.free(name);
+                self.allocator.free(imported_dll.Functions);
+            }
+            self.allocator.free(import_directory);
         }
-        self.import_directory.deinit();
 
-        if (self.basereloc_table) |basereloc_table| self.allocator.free(basereloc_table);
+        if (self.base_relocation_directory) |base_relocation_directory| {
+            for (base_relocation_directory) |base_relocation_block| self.allocator.free(base_relocation_block.Entries);
+            self.allocator.free(base_relocation_directory);
+        }
     }
 
     pub fn parse(self: *Self) !void {
@@ -54,7 +55,7 @@ pub const PEParser = struct {
         try self.parseNTHeaders();
         try self.parseSectionHeaders();
         try self.parseImportDirectory();
-        try self.parseBaseRelocation();
+        try self.parseBaseRelocationDirectory();
     }
 
     fn parseDOSHeader(self: *Self) !void {
@@ -188,6 +189,9 @@ pub const PEParser = struct {
         const import_descriptor_size = @sizeOf(types.IMAGE_IMPORT_DESCRIPTOR);
         var import_descriptor_index: usize = 0;
 
+        var import_directory = std.ArrayList(types.IMPORTED_DLL).init(self.allocator);
+        errdefer import_directory.deinit();
+
         while (true) : (import_descriptor_index += 1) {
             try self.file.seekTo(import_directory_address + import_descriptor_size * import_descriptor_index);
 
@@ -199,22 +203,13 @@ pub const PEParser = struct {
 
             const name = try reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
 
-            const dll_entry = try self.import_directory.getOrPut(name);
-            if (!dll_entry.found_existing) {
-                dll_entry.value_ptr.* = .{
-                    .OriginalFirstThunk = import_descriptor.Anonymous.OriginalFirstThunk,
-                    .TimeDateStamp = import_descriptor.TimeDateStamp,
-                    .ForwarderChain = import_descriptor.ForwarderChain,
-                    .NameRva = import_descriptor.Name,
-                    .FirstThunk = import_descriptor.FirstThunk,
-                    .Functions = std.ArrayList(types.IMPORTED_FUNCTION).init(self.allocator),
-                };
-            }
-
             const ilt_addr = try self.rvaToFileOffset(import_descriptor.Anonymous.OriginalFirstThunk);
 
             const entry_size: usize = if (self.is_64bit) @sizeOf(types.ILT_ENTRY64) else @sizeOf(types.ILT_ENTRY32);
             var entry_index: usize = 0;
+
+            var functions = std.ArrayList(types.IMPORTED_FUNCTION).init(self.allocator);
+            errdefer functions.deinit();
 
             while (true) : (entry_index += 1) {
                 try self.file.seekTo(ilt_addr + entry_size * entry_index);
@@ -256,34 +251,59 @@ pub const PEParser = struct {
                     imported_function.Ordinal = ordinal;
                 }
 
-                try dll_entry.value_ptr.Functions.append(imported_function);
+                try functions.append(imported_function);
             }
+
+            try import_directory.append(.{
+                .Name = name,
+                .OriginalFirstThunk = import_descriptor.Anonymous.OriginalFirstThunk,
+                .TimeDateStamp = import_descriptor.TimeDateStamp,
+                .ForwarderChain = import_descriptor.ForwarderChain,
+                .NameRva = import_descriptor.Name,
+                .FirstThunk = import_descriptor.FirstThunk,
+                .Functions = try functions.toOwnedSlice(),
+            });
         }
+
+        self.import_directory = try import_directory.toOwnedSlice();
     }
 
-    fn parseBaseRelocation(self: *Self) !void {
+    fn parseBaseRelocationDirectory(self: *Self) !void {
         assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
 
         const IMAGE_DIRECTORY_ENTRY_BASERELOC = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.BASERELOC);
         const basereloc_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
         const basereloc_directory_address = try self.rvaToFileOffset(basereloc_directory_va);
 
-        var basereloc_table = std.ArrayList(types.IMAGE_BASE_RELOCATION).init(self.allocator);
-        errdefer basereloc_table.deinit();
-
         try self.file.seekTo(basereloc_directory_address);
         const reader = self.file.reader();
+
+        var base_relocation_directory = std.ArrayList(types.BASE_RELOCATION_BLOCK).init(self.allocator);
+        errdefer base_relocation_directory.deinit();
 
         while (true) {
             const base_relocation = try reader.readStruct(types.IMAGE_BASE_RELOCATION);
 
             if (base_relocation.VirtualAddress == 0 and base_relocation.SizeOfBlock == 0) break;
 
-            try basereloc_table.append(base_relocation);
-            try reader.skipBytes(base_relocation.SizeOfBlock - @sizeOf(types.IMAGE_BASE_RELOCATION), .{});
+            const entries_len = (base_relocation.SizeOfBlock - @sizeOf(types.IMAGE_BASE_RELOCATION)) / @sizeOf(types.BASE_RELOCATION_ENTRY);
+
+            var entries = std.ArrayList(types.BASE_RELOCATION_ENTRY).init(self.allocator);
+            errdefer entries.deinit();
+
+            for (0..entries_len) |_| {
+                const entry = try reader.readStruct(types.BASE_RELOCATION_ENTRY);
+                try entries.append(entry);
+            }
+
+            try base_relocation_directory.append(.{
+                .VirtualAddress = base_relocation.VirtualAddress,
+                .SizeOfBlock = base_relocation.SizeOfBlock,
+                .Entries = try entries.toOwnedSlice(),
+            });
         }
 
-        self.basereloc_table = try basereloc_table.toOwnedSlice();
+        self.base_relocation_directory = try base_relocation_directory.toOwnedSlice();
     }
 
     pub fn rvaToFileOffset(self: Self, rva: u32) !u32 {
@@ -309,7 +329,7 @@ pub const PEParser = struct {
         try writer.writeAll("\n");
         try self.printImportDirectoryInfo(writer);
         try writer.writeAll("\n");
-        try self.printBaseRelocationInfo(writer);
+        try self.printBaseRelocationDirectoryInfo(writer);
         try writer.writeAll("\n");
     }
 
@@ -503,26 +523,23 @@ pub const PEParser = struct {
     }
 
     fn printImportDirectoryInfo(self: Self, writer: anytype) !void {
+        const import_directory = self.import_directory orelse return;
+
         try writer.writeAll("IMPORT TABLE:\n");
         try writer.writeAll("--------------\n\n");
 
-        var import_directory_iter = self.import_directory.iterator();
+        for (import_directory) |imported_dll| {
+            try writer.print("  * {s}:\n", .{imported_dll.Name});
 
-        while (import_directory_iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const import_descriptor = entry.value_ptr.*;
+            try writer.print("      ILT RVA: 0x{X}\n", .{imported_dll.OriginalFirstThunk});
+            try writer.print("      IAT RVA: 0x{X}\n", .{imported_dll.FirstThunk});
+            try writer.print("      Name RVA: 0x{X}\n", .{imported_dll.NameRva});
+            try writer.print("      TimeDateStamp: 0x{X}\n", .{imported_dll.TimeDateStamp});
+            try writer.print("      ForwarderChain: 0x{x}\n", .{imported_dll.ForwarderChain});
+            try writer.print("      Bound: {}\n", .{imported_dll.TimeDateStamp != 0});
+            try writer.print("      Function Count: {}\n", .{imported_dll.Functions.len});
 
-            try writer.print("  * {s}:\n", .{name});
-
-            try writer.print("      ILT RVA: 0x{X}\n", .{import_descriptor.OriginalFirstThunk});
-            try writer.print("      IAT RVA: 0x{X}\n", .{import_descriptor.FirstThunk});
-            try writer.print("      Name RVA: 0x{X}\n", .{import_descriptor.NameRva});
-            try writer.print("      TimeDateStamp: 0x{X}\n", .{import_descriptor.TimeDateStamp});
-            try writer.print("      ForwarderChain: 0x{x}\n", .{import_descriptor.ForwarderChain});
-            try writer.print("      Bound: {}\n", .{import_descriptor.TimeDateStamp != 0});
-            try writer.print("      Function Count: {}\n", .{import_descriptor.Functions.items.len});
-
-            for (import_descriptor.Functions.items) |function| {
+            for (imported_dll.Functions) |function| {
                 try writer.writeAll("\n     Entry:\n");
 
                 if (function.Name) |entry_name| try writer.print("          Name: {s}\n", .{entry_name});
@@ -534,34 +551,20 @@ pub const PEParser = struct {
         }
     }
 
-    fn printBaseRelocationInfo(self: Self, writer: anytype) !void {
-        const basereloc_table = self.basereloc_table orelse return;
-
-        const IMAGE_DIRECTORY_ENTRY_BASERELOC = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.BASERELOC);
-        const basereloc_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
-        const basereloc_directory_address = try self.rvaToFileOffset(basereloc_directory_va);
+    fn printBaseRelocationDirectoryInfo(self: Self, writer: anytype) !void {
+        const base_relocation_directory = self.base_relocation_directory orelse return;
 
         try writer.writeAll("BASE RELOCATION TABLE:\n");
         try writer.writeAll("----------------------\n\n");
 
-        try self.file.seekTo(basereloc_directory_address);
-        const reader = self.file.reader();
-
-        for (basereloc_table, 0..) |base_relocation, i| {
-            const page_rva = base_relocation.VirtualAddress;
-            const block_size = base_relocation.SizeOfBlock;
-            const entries_len = (block_size - @sizeOf(types.IMAGE_BASE_RELOCATION)) / @sizeOf(types.BASE_RELOC_ENTRY);
-
+        for (base_relocation_directory, 0..) |base_relocation_block, i| {
             try writer.print("\n    Block: 0x{X}: \n", .{i});
-            try writer.print("      Page RVA: 0x{X}\n", .{page_rva});
-            try writer.print("      Block size: 0x{X}\n", .{block_size});
-            try writer.print("      Number of entries: 0x{X}\n", .{entries_len});
+            try writer.print("      Page RVA: 0x{X}\n", .{base_relocation_block.VirtualAddress});
+            try writer.print("      Block size: 0x{X}\n", .{base_relocation_block.SizeOfBlock});
+            try writer.print("      Number of entries: 0x{X}\n", .{base_relocation_block.Entries.len});
             try writer.writeAll("\n    Entries:\n");
 
-            try reader.skipBytes(@sizeOf(types.IMAGE_BASE_RELOCATION), .{});
-            for (0..entries_len) |_| {
-                const entry = try reader.readStruct(types.BASE_RELOC_ENTRY);
-
+            for (base_relocation_block.Entries) |entry| {
                 try writer.print("\n        * Value: 0x{X}\n", .{@as(u16, @bitCast(entry))});
                 try writer.print("          Relocation Type: 0x{X}\n", .{entry.TYPE});
                 try writer.print("          Offset: 0x{X}\n", .{entry.OFFSET});

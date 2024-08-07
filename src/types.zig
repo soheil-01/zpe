@@ -326,16 +326,6 @@ pub const ILT_ENTRY64 = packed struct(u64) {
     ORDINAL_NAME_FLAG: u1,
 };
 
-pub const IMAGE_BASE_RELOCATION = extern struct {
-    VirtualAddress: u32,
-    SizeOfBlock: u32,
-};
-
-pub const BASE_RELOC_ENTRY = packed struct(u16) {
-    OFFSET: u12,
-    TYPE: u4,
-};
-
 pub const IMPORTED_FUNCTION = struct {
     Name: ?[]const u8,
     Hint: ?u16,
@@ -343,10 +333,27 @@ pub const IMPORTED_FUNCTION = struct {
 };
 
 pub const IMPORTED_DLL = struct {
+    Name: []const u8,
     OriginalFirstThunk: u32,
     TimeDateStamp: u32,
     ForwarderChain: u32,
     NameRva: u32,
     FirstThunk: u32,
-    Functions: std.ArrayList(IMPORTED_FUNCTION),
+    Functions: []IMPORTED_FUNCTION,
+};
+
+pub const IMAGE_BASE_RELOCATION = extern struct {
+    VirtualAddress: u32,
+    SizeOfBlock: u32,
+};
+
+pub const BASE_RELOCATION_ENTRY = packed struct(u16) {
+    OFFSET: u12,
+    TYPE: u4,
+};
+
+pub const BASE_RELOCATION_BLOCK = struct {
+    VirtualAddress: u32,
+    SizeOfBlock: u32,
+    Entries: []BASE_RELOCATION_ENTRY,
 };
