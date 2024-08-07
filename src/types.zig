@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // Note: Most of these types are copied from the zigwin32 library (https://github.com/marlersoft/zigwin32)
 // due to alignment issues in the original library and to improve ZLS performance by avoiding
 // the inclusion of the entire library. Modifications have been made to correct alignment problems.
@@ -332,4 +334,19 @@ pub const IMAGE_BASE_RELOCATION = extern struct {
 pub const BASE_RELOC_ENTRY = packed struct(u16) {
     OFFSET: u12,
     TYPE: u4,
+};
+
+pub const IMPORTED_FUNCTION = struct {
+    Name: ?[]const u8,
+    Hint: ?u16,
+    Ordinal: ?u16,
+};
+
+pub const IMPORTED_DLL = struct {
+    OriginalFirstThunk: u32,
+    TimeDateStamp: u32,
+    ForwarderChain: u32,
+    NameRva: u32,
+    FirstThunk: u32,
+    Functions: std.ArrayList(IMPORTED_FUNCTION),
 };
