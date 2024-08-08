@@ -18,6 +18,7 @@ pub fn main() !void {
     const app = cli.App{
         .command = cli.Command{
             .name = "parse",
+            .description = .{ .one_line = "Portable Executable parser" },
             .options = &.{
                 .{
                     .long_name = "file-path",
