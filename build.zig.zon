@@ -8,6 +8,10 @@
             .url = "git+https://github.com/frmdstryr/zig-datetime?ref=master#70aebf28fb3e137cd84123a9349d157a74708721",
             .hash = "122077215ce36e125a490e59ec1748ffd4f6ba00d4d14f7308978e5360711d72d77f",
         },
+        .@"zig-cli" = .{
+            .url = "git+https://github.com/sam701/zig-cli#9a94c4803a52e54c26b198096d63fb5bde752da2",
+            .hash = "1220ab73fb7cc11b2308edc3364988e05efcddbcac31b707f55e6216d1b9c0da13f1",
+        },
     },
     .paths = .{
         "build.zig",

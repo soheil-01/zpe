@@ -333,7 +333,7 @@ pub const PEParser = struct {
         try writer.writeAll("\n");
     }
 
-    fn printDOSHeaderInfo(self: Self, writer: anytype) !void {
+    pub fn printDOSHeaderInfo(self: Self, writer: anytype) !void {
         const dos_header = self.dos_header orelse return;
 
         try writer.writeAll("DOS Header:\n");
@@ -378,7 +378,7 @@ pub const PEParser = struct {
         try writer.print("  File address of new exe header: 0x{X}\n", .{dos_header.e_lfanew});
     }
 
-    fn printRichHeaderInfo(self: Self, writer: anytype) !void {
+    pub fn printRichHeaderInfo(self: Self, writer: anytype) !void {
         const rich_header_entries = self.rich_header_entries orelse return;
 
         try writer.writeAll("Rich Header:\n");
@@ -389,7 +389,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printNTHeadersInfo(self: Self, writer: anytype) !void {
+    pub fn printNTHeadersInfo(self: Self, writer: anytype) !void {
         try writer.writeAll("NT Headers:\n");
         try writer.writeAll("------------\n\n");
 
@@ -400,7 +400,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printNTHeaders32Info(self: Self, writer: anytype) !void {
+    pub fn printNTHeaders32Info(self: Self, writer: anytype) !void {
         const nt_headers = self.nt_headers_32 orelse return;
 
         try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
@@ -409,7 +409,7 @@ pub const PEParser = struct {
         try printNTOptionalHeaderFields(writer, nt_headers.OptionalHeader);
     }
 
-    fn printNTHeaders64Info(self: Self, writer: anytype) !void {
+    pub fn printNTHeaders64Info(self: Self, writer: anytype) !void {
         const nt_headers = self.nt_headers_64 orelse return;
 
         try writer.print("  PE Signature: 0x{X}\n", .{nt_headers.Signature});
@@ -418,7 +418,7 @@ pub const PEParser = struct {
         try printNTOptionalHeaderFields(writer, nt_headers.OptionalHeader);
     }
 
-    fn printNTFileHeaderInfo(writer: anytype, file_header: types.IMAGE_FILE_HEADER) !void {
+    pub fn printNTFileHeaderInfo(writer: anytype, file_header: types.IMAGE_FILE_HEADER) !void {
         try writer.writeAll("\nFile Header:\n\n");
         try writer.print("  Machine: {s} (0x{X})\n", .{ @tagName(file_header.Machine), @intFromEnum(file_header.Machine) });
         try writer.print("  Number of sections: {}\n", .{file_header.NumberOfSections});
@@ -440,7 +440,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printNTOptionalHeaderFields(writer: anytype, optional_header: anytype) !void {
+    pub fn printNTOptionalHeaderFields(writer: anytype, optional_header: anytype) !void {
         try writer.writeAll("\nOptional Header:\n\n");
         try writer.print("  Magic: 0x{X}\n", .{@intFromEnum(optional_header.Magic)});
         try writer.print("  Major linker version: 0x{X}\n", .{optional_header.MajorLinkerVersion});
@@ -493,7 +493,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printSectionHeadersInfo(self: Self, writer: anytype) !void {
+    pub fn printSectionHeadersInfo(self: Self, writer: anytype) !void {
         const section_headers = self.section_headers orelse return;
 
         try writer.writeAll("Section Headers:\n");
@@ -522,7 +522,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printImportDirectoryInfo(self: Self, writer: anytype) !void {
+    pub fn printImportDirectoryInfo(self: Self, writer: anytype) !void {
         const import_directory = self.import_directory orelse return;
 
         try writer.writeAll("IMPORT TABLE:\n");
@@ -551,7 +551,7 @@ pub const PEParser = struct {
         }
     }
 
-    fn printBaseRelocationDirectoryInfo(self: Self, writer: anytype) !void {
+    pub fn printBaseRelocationDirectoryInfo(self: Self, writer: anytype) !void {
         const base_relocation_directory = self.base_relocation_directory orelse return;
 
         try writer.writeAll("BASE RELOCATION TABLE:\n");
