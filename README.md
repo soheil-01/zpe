@@ -46,7 +46,7 @@ fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var parser = try PEParser.init(allocator, "path/to/your/executable.exe");
+    var parser = try PEParser.init(allocator, "path/to/your/file");
     defer parser.deinit();
 
     try parser.parse();
