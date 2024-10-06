@@ -357,3 +357,39 @@ pub const BASE_RELOCATION_BLOCK = struct {
     SizeOfBlock: u32,
     Entries: []BASE_RELOCATION_ENTRY,
 };
+
+pub const IMAGE_EXPORT_DIRECTORY = extern struct {
+    Characteristics: u32,
+    TimeDateStamp: u32,
+    MajorVersion: u16,
+    MinorVersion: u16,
+    Name: u32,
+    Base: u32,
+    NumberOfFunctions: u32,
+    NumberOfNames: u32,
+    AddressOfFunctions: u32,
+    AddressOfNames: u32,
+    AddressOfNameOrdinals: u32,
+};
+
+pub const EXPORT_DIRECTORY = struct {
+    Characteristics: u32,
+    TimeDateStamp: u32,
+    MajorVersion: u16,
+    MinorVersion: u16,
+    NameRva: u32,
+    Name: []const u8,
+    Base: u32,
+    NumberOfFunctions: u32,
+    NumberOfNames: u32,
+    AddressOfFunctions: u32,
+    AddressOfNames: u32,
+    AddressOfNameOrdinals: u32,
+    Functions: []EXPORTED_FUNCTION,
+};
+
+pub const EXPORTED_FUNCTION = struct {
+    Rva: u32,
+    NameRva: u32,
+    Name: []const u8,
+};

@@ -9,6 +9,7 @@ var config = struct {
     print_nt_headers: bool = false,
     print_section_headers: bool = false,
     print_import_directory: bool = false,
+    print_export_directory: bool = false,
     print_base_relocation_directory: bool = false,
 }{};
 
@@ -52,6 +53,11 @@ pub fn main() !void {
                     .value_ref = r.mkRef(&config.print_import_directory),
                 },
                 .{
+                    .long_name = "print-export-directory",
+                    .help = "Print export directory information",
+                    .value_ref = r.mkRef(&config.print_export_directory),
+                },
+                .{
                     .long_name = "print-base-relocation-directory",
                     .help = "Print base relocation directory information",
                     .value_ref = r.mkRef(&config.print_base_relocation_directory),
@@ -82,7 +88,7 @@ fn run_parser() !void {
 
     const stdout = bw.writer();
 
-    if (!config.print_dos_header and !config.print_rich_header and !config.print_nt_headers and !config.print_section_headers and !config.print_import_directory and !config.print_base_relocation_directory) {
+    if (!config.print_dos_header and !config.print_rich_header and !config.print_nt_headers and !config.print_section_headers and !config.print_import_directory and !config.print_base_relocation_directory and !config.print_export_directory) {
         try parser.print(stdout);
     } else {
         if (config.print_dos_header) {
@@ -99,6 +105,9 @@ fn run_parser() !void {
         }
         if (config.print_import_directory) {
             try parser.printImportDirectoryInfo(stdout);
+        }
+        if (config.print_export_directory) {
+            try parser.printExportDirectoryInfo(stdout);
         }
         if (config.print_base_relocation_directory) {
             try parser.printBaseRelocationDirectoryInfo(stdout);

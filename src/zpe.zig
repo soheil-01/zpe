@@ -7,7 +7,7 @@ pub const PEParser = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    file: std.fs.File,
+    reader: std.fs.File.Reader,
     dos_header: ?types.IMAGE_DOS_HEADER = null,
     rich_header_entries: ?[]types.RICH_HEADER_ENTRY = null,
     nt_headers_32: ?types.IMAGE_NT_HEADERS32 = null,
@@ -15,6 +15,7 @@ pub const PEParser = struct {
     is_64bit: bool = false,
     section_headers: ?[]types.IMAGE_SECTION_HEADER = null,
     import_directory: ?[]types.IMPORTED_DLL = null,
+    export_directory: ?types.EXPORT_DIRECTORY = null,
     base_relocation_directory: ?[]types.BASE_RELOCATION_BLOCK = null,
 
     // TODO: file path or file content
@@ -22,15 +23,16 @@ pub const PEParser = struct {
 
         // TODO: keeping the file open until the parser is deinitialized or creating a copy of the file content
         const file = try std.fs.cwd().openFile(file_path, .{});
+        const reader = file.reader();
 
         return .{
             .allocator = allocator,
-            .file = file,
+            .reader = reader,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.file.close();
+        self.reader.context.close();
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
         if (self.section_headers) |section_headers| self.allocator.free(section_headers);
 
@@ -41,6 +43,12 @@ pub const PEParser = struct {
                 self.allocator.free(imported_dll.Functions);
             }
             self.allocator.free(import_directory);
+        }
+
+        if (self.export_directory) |export_directory| {
+            self.allocator.free(export_directory.Name);
+            for (export_directory.Functions) |function| self.allocator.free(function.Name);
+            self.allocator.free(export_directory.Functions);
         }
 
         if (self.base_relocation_directory) |base_relocation_directory| {
@@ -55,19 +63,16 @@ pub const PEParser = struct {
         try self.parseNTHeaders();
         try self.parseSectionHeaders();
         try self.parseImportDirectory();
+        try self.parseExportDirectory();
         try self.parseBaseRelocationDirectory();
     }
 
     fn parseDOSHeader(self: *Self) !void {
-        // TODO: is it required to seek to 0?
-        try self.file.seekTo(0);
-
-        // TODO: keep the file.reader() as the struct member
-        const reader = self.file.reader();
+        try self.reader.context.seekTo(0);
 
         const IMAGE_DOS_SIGNATURE = 0x5A4D;
 
-        const dos_header = try reader.readStruct(types.IMAGE_DOS_HEADER);
+        const dos_header = try self.reader.readStruct(types.IMAGE_DOS_HEADER);
         if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return error.InvalidDOSHeaderMagic;
 
         self.dos_header = dos_header;
@@ -78,14 +83,12 @@ pub const PEParser = struct {
 
         const dos_header = self.dos_header.?;
 
-        try self.file.seekTo(0);
-
-        const reader = self.file.reader();
+        try self.reader.context.seekTo(0);
 
         var buffer = try self.allocator.alloc(u8, @intCast(dos_header.e_lfanew));
         defer self.allocator.free(buffer);
 
-        try reader.readNoEof(buffer);
+        try self.reader.readNoEof(buffer);
 
         const rich_id_index = std.mem.indexOf(u8, buffer, "Rich") orelse return;
 
@@ -130,27 +133,23 @@ pub const PEParser = struct {
         assert(self.dos_header != null);
 
         const e_lfanew = self.dos_header.?.e_lfanew;
-        try self.file.seekTo(@intCast(e_lfanew + @sizeOf(std.os.windows.DWORD) + @sizeOf(types.IMAGE_FILE_HEADER)));
+        try self.reader.context.seekTo(@intCast(e_lfanew + @sizeOf(std.os.windows.DWORD) + @sizeOf(types.IMAGE_FILE_HEADER)));
 
-        const reader = self.file.reader();
-
-        const optional_header_magic = try reader.readEnum(types.IMAGE_OPTIONAL_HEADER_MAGIC, .little);
+        const optional_header_magic = try self.reader.readEnum(types.IMAGE_OPTIONAL_HEADER_MAGIC, .little);
         self.is_64bit = if (optional_header_magic == .NT_OPTIONAL_HDR_MAGIC) true else false;
 
-        try self.file.seekTo(@intCast(e_lfanew));
+        try self.reader.context.seekTo(@intCast(e_lfanew));
 
         if (self.is_64bit) {
-            self.nt_headers_64 = try reader.readStruct(types.IMAGE_NT_HEADERS64);
+            self.nt_headers_64 = try self.reader.readStruct(types.IMAGE_NT_HEADERS64);
         } else {
-            self.nt_headers_32 = try reader.readStruct(types.IMAGE_NT_HEADERS32);
+            self.nt_headers_32 = try self.reader.readStruct(types.IMAGE_NT_HEADERS32);
         }
     }
 
     fn parseSectionHeaders(self: *Self) !void {
         assert(self.dos_header != null);
         assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
-
-        const reader = self.file.reader();
 
         const e_lfanew: usize = @intCast(self.dos_header.?.e_lfanew);
 
@@ -167,10 +166,10 @@ pub const PEParser = struct {
 
         var section_headers = try self.allocator.alloc(types.IMAGE_SECTION_HEADER, file_header.NumberOfSections);
 
-        try self.file.seekTo(e_lfanew + nt_headers_size);
+        try self.reader.context.seekTo(e_lfanew + nt_headers_size);
 
         for (0..file_header.NumberOfSections) |section_index| {
-            const section_header = try reader.readStruct(types.IMAGE_SECTION_HEADER);
+            const section_header = try self.reader.readStruct(types.IMAGE_SECTION_HEADER);
             section_headers[section_index] = section_header;
         }
 
@@ -184,8 +183,6 @@ pub const PEParser = struct {
         const import_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
         const import_directory_address = try self.rvaToFileOffset(import_directory_va);
 
-        const reader = self.file.reader();
-
         const import_descriptor_size = @sizeOf(types.IMAGE_IMPORT_DESCRIPTOR);
         var import_descriptor_index: usize = 0;
 
@@ -193,15 +190,15 @@ pub const PEParser = struct {
         errdefer import_directory.deinit();
 
         while (true) : (import_descriptor_index += 1) {
-            try self.file.seekTo(import_directory_address + import_descriptor_size * import_descriptor_index);
+            try self.reader.context.seekTo(import_directory_address + import_descriptor_size * import_descriptor_index);
 
-            const import_descriptor = try reader.readStruct(types.IMAGE_IMPORT_DESCRIPTOR);
+            const import_descriptor = try self.reader.readStruct(types.IMAGE_IMPORT_DESCRIPTOR);
             if (import_descriptor.Name == 0 and import_descriptor.FirstThunk == 0) break;
 
             const name_addr = try self.rvaToFileOffset(import_descriptor.Name);
-            try self.file.seekTo(name_addr);
+            try self.reader.context.seekTo(name_addr);
 
-            const name = try reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+            const name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
 
             const ilt_addr = try self.rvaToFileOffset(import_descriptor.Anonymous.OriginalFirstThunk);
 
@@ -212,19 +209,19 @@ pub const PEParser = struct {
             errdefer functions.deinit();
 
             while (true) : (entry_index += 1) {
-                try self.file.seekTo(ilt_addr + entry_size * entry_index);
+                try self.reader.context.seekTo(ilt_addr + entry_size * entry_index);
 
                 var flag: u1 = 0;
                 var ordinal: u16 = 0;
                 var hint_rva: u31 = 0;
 
                 if (self.is_64bit) {
-                    const entry = try reader.readStruct(types.ILT_ENTRY64);
+                    const entry = try self.reader.readStruct(types.ILT_ENTRY64);
                     flag = entry.ORDINAL_NAME_FLAG;
                     ordinal = entry.ANONYMOUS.ORDINAL;
                     hint_rva = entry.ANONYMOUS.HINT_NAME_TABLE_RVA;
                 } else {
-                    const entry = try reader.readStruct(types.ILT_ENTRY32);
+                    const entry = try self.reader.readStruct(types.ILT_ENTRY32);
                     flag = entry.ORDINAL_NAME_FLAG;
                     ordinal = entry.ANONYMOUS.ORDINAL;
                     hint_rva = entry.ANONYMOUS.HINT_NAME_TABLE_RVA;
@@ -240,10 +237,10 @@ pub const PEParser = struct {
 
                 if (flag == 0) {
                     const hint_addr = try self.rvaToFileOffset(hint_rva);
-                    try self.file.seekTo(hint_addr);
+                    try self.reader.context.seekTo(hint_addr);
 
-                    const hint = try reader.readInt(u16, .little);
-                    const entry_name = try reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+                    const hint = try self.reader.readInt(u16, .little);
+                    const entry_name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
 
                     imported_function.Hint = hint;
                     imported_function.Name = entry_name;
@@ -268,6 +265,72 @@ pub const PEParser = struct {
         self.import_directory = try import_directory.toOwnedSlice();
     }
 
+    fn parseExportDirectory(self: *Self) !void {
+        assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
+
+        const IMAGE_DIRECTORY_ENTRY_EXPORT = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.EXPORT);
+        const export_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+
+        if (export_directory_va == 0) return;
+
+        const export_directory_address = try self.rvaToFileOffset(export_directory_va);
+
+        try self.reader.context.seekTo(export_directory_address);
+
+        const export_directory = try self.reader.readStruct(types.IMAGE_EXPORT_DIRECTORY);
+
+        const export_name_address = try self.rvaToFileOffset(export_directory.Name);
+        try self.reader.context.seekTo(export_name_address);
+        const export_name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+
+        const num_of_functions = export_directory.NumberOfFunctions;
+
+        const functions_address = try self.rvaToFileOffset(export_directory.AddressOfFunctions);
+        const addresses = try self.allocator.alloc(u32, num_of_functions);
+        defer self.allocator.free(addresses);
+        try self.reader.context.seekTo(functions_address);
+        for (0..num_of_functions) |i| {
+            addresses[i] = try self.reader.readInt(u32, .little);
+        }
+
+        const names_address = try self.rvaToFileOffset(export_directory.AddressOfNames);
+        const names = try self.allocator.alloc(struct { Name: []const u8, Rva: u32 }, num_of_functions);
+        defer self.allocator.free(names);
+        for (0..num_of_functions) |i| {
+            try self.reader.context.seekTo(names_address + i * 4);
+            const name_rva = try self.reader.readInt(u32, .little);
+            const name_address = try self.rvaToFileOffset(name_rva);
+            try self.reader.context.seekTo(name_address);
+            const name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+            names[i] = .{ .Name = name, .Rva = name_rva };
+        }
+
+        const exported_functions = try self.allocator.alloc(types.EXPORTED_FUNCTION, num_of_functions);
+        for (0..num_of_functions) |i| {
+            exported_functions[i] = .{
+                .Rva = addresses[i],
+                .NameRva = names[i].Rva,
+                .Name = names[i].Name,
+            };
+        }
+
+        self.export_directory = .{
+            .Characteristics = export_directory.Characteristics,
+            .TimeDateStamp = export_directory.TimeDateStamp,
+            .MajorVersion = export_directory.MajorVersion,
+            .MinorVersion = export_directory.MinorVersion,
+            .NameRva = export_directory.Name,
+            .Name = export_name,
+            .Base = export_directory.Base,
+            .NumberOfFunctions = export_directory.NumberOfFunctions,
+            .NumberOfNames = export_directory.NumberOfNames,
+            .AddressOfFunctions = export_directory.AddressOfFunctions,
+            .AddressOfNames = export_directory.AddressOfNames,
+            .AddressOfNameOrdinals = export_directory.AddressOfNameOrdinals,
+            .Functions = exported_functions,
+        };
+    }
+
     fn parseBaseRelocationDirectory(self: *Self) !void {
         assert(if (self.is_64bit) self.nt_headers_64 != null else self.nt_headers_32 != null);
 
@@ -275,14 +338,13 @@ pub const PEParser = struct {
         const basereloc_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
         const basereloc_directory_address = try self.rvaToFileOffset(basereloc_directory_va);
 
-        try self.file.seekTo(basereloc_directory_address);
-        const reader = self.file.reader();
+        try self.reader.context.seekTo(basereloc_directory_address);
 
         var base_relocation_directory = std.ArrayList(types.BASE_RELOCATION_BLOCK).init(self.allocator);
         errdefer base_relocation_directory.deinit();
 
         while (true) {
-            const base_relocation = try reader.readStruct(types.IMAGE_BASE_RELOCATION);
+            const base_relocation = try self.reader.readStruct(types.IMAGE_BASE_RELOCATION);
 
             if (base_relocation.VirtualAddress == 0 and base_relocation.SizeOfBlock == 0) break;
 
@@ -292,7 +354,7 @@ pub const PEParser = struct {
             errdefer entries.deinit();
 
             for (0..entries_len) |_| {
-                const entry = try reader.readStruct(types.BASE_RELOCATION_ENTRY);
+                const entry = try self.reader.readStruct(types.BASE_RELOCATION_ENTRY);
                 try entries.append(entry);
             }
 
@@ -328,6 +390,8 @@ pub const PEParser = struct {
         try self.printSectionHeadersInfo(writer);
         try writer.writeAll("\n");
         try self.printImportDirectoryInfo(writer);
+        try writer.writeAll("\n");
+        try self.printExportDirectoryInfo(writer);
         try writer.writeAll("\n");
         try self.printBaseRelocationDirectoryInfo(writer);
         try writer.writeAll("\n");
@@ -425,7 +489,7 @@ pub const PEParser = struct {
 
         var buf: [60]u8 = undefined;
         const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(file_header.TimeDateStamp)).formatHttpBuf(&buf);
-        try writer.print("  Time date stamp: 0x{X} ({s})\n", .{ file_header.TimeDateStamp, time_date_string });
+        try writer.print("  TimeDateStamp: 0x{X} ({s})\n", .{ file_header.TimeDateStamp, time_date_string });
 
         try writer.print("  Pointer to symbol table: 0x{X}\n", .{file_header.PointerToSymbolTable});
         try writer.print("  Number of symbols: {}\n", .{file_header.NumberOfSymbols});
@@ -534,7 +598,11 @@ pub const PEParser = struct {
             try writer.print("      ILT RVA: 0x{X}\n", .{imported_dll.OriginalFirstThunk});
             try writer.print("      IAT RVA: 0x{X}\n", .{imported_dll.FirstThunk});
             try writer.print("      Name RVA: 0x{X}\n", .{imported_dll.NameRva});
-            try writer.print("      TimeDateStamp: 0x{X}\n", .{imported_dll.TimeDateStamp});
+
+            var buf: [60]u8 = undefined;
+            const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(imported_dll.TimeDateStamp)).formatHttpBuf(&buf);
+            try writer.print("  TimeDateStamp: 0x{X} ({s})\n", .{ imported_dll.TimeDateStamp, time_date_string });
+
             try writer.print("      ForwarderChain: 0x{x}\n", .{imported_dll.ForwarderChain});
             try writer.print("      Bound: {}\n", .{imported_dll.TimeDateStamp != 0});
             try writer.print("      Function Count: {}\n", .{imported_dll.Functions.len});
@@ -548,6 +616,38 @@ pub const PEParser = struct {
             }
 
             try writer.writeAll("\n   ----------------------\n\n");
+        }
+    }
+
+    pub fn printExportDirectoryInfo(self: Self, writer: anytype) !void {
+        const export_directory = self.export_directory orelse return;
+
+        try writer.writeAll("EXPORT TABLE:\n");
+        try writer.writeAll("--------------\n\n");
+
+        try writer.print("  Characteristics: 0x{X}\n", .{export_directory.Characteristics});
+
+        var buf: [60]u8 = undefined;
+        const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(export_directory.TimeDateStamp)).formatHttpBuf(&buf);
+        try writer.print("  TimeDateStamp: 0x{X} ({s})\n", .{ export_directory.TimeDateStamp, time_date_string });
+
+        try writer.print("  MajorVersion: 0x{X}\n", .{export_directory.MajorVersion});
+        try writer.print("  MinorVersion: 0x{X}\n", .{export_directory.MinorVersion});
+        try writer.print("  Name RVA: 0x{X}\n", .{export_directory.NameRva});
+        try writer.print("  Name: {s}\n", .{export_directory.Name});
+        try writer.print("  Base: 0x{X}\n", .{export_directory.Base});
+        try writer.print("  Number Of Functions: 0x{X}\n", .{export_directory.NumberOfFunctions});
+        try writer.print("  Number Of Names: 0x{X}\n", .{export_directory.NumberOfNames});
+        try writer.print("  Functions RVA: 0x{X}\n", .{export_directory.AddressOfFunctions});
+        try writer.print("  Names RVA: 0x{X}\n", .{export_directory.AddressOfNames});
+        try writer.print("  NameOrdinals RVA: 0x{X}\n", .{export_directory.AddressOfNameOrdinals});
+
+        try writer.writeAll("  Exported Functions:\n\n");
+        for (export_directory.Functions, 0..) |function, i| {
+            try writer.print("      Ordinal: 0x{X}\n", .{export_directory.Base + i});
+            try writer.print("      Function RVA: 0x{X}\n", .{function.Rva});
+            try writer.print("      Name RVA: 0x{X}\n", .{function.NameRva});
+            try writer.print("      Name: {s}\n\n", .{function.Name});
         }
     }
 
