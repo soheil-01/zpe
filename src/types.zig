@@ -388,8 +388,14 @@ pub const EXPORT_DIRECTORY = struct {
     Functions: []EXPORTED_FUNCTION,
 };
 
+pub const EXPORT_ADDRESS_TABLE_ENTRY = union(enum) {
+    ExportRva: u32,
+    Forwarder: []const u8,
+};
+
 pub const EXPORTED_FUNCTION = struct {
-    Rva: u32,
+    Anonymous: EXPORT_ADDRESS_TABLE_ENTRY,
     NameRva: u32,
     Name: []const u8,
+    Ordinal: u16,
 };

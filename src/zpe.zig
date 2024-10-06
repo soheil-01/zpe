@@ -47,7 +47,10 @@ pub const PEParser = struct {
 
         if (self.export_directory) |export_directory| {
             self.allocator.free(export_directory.Name);
-            for (export_directory.Functions) |function| self.allocator.free(function.Name);
+            for (export_directory.Functions) |function| {
+                if (function.Anonymous == .Forwarder) self.allocator.free(function.Anonymous.Forwarder);
+                self.allocator.free(function.Name);
+            }
             self.allocator.free(export_directory.Functions);
         }
 
@@ -270,6 +273,7 @@ pub const PEParser = struct {
 
         const IMAGE_DIRECTORY_ENTRY_EXPORT = @intFromEnum(types.IMAGE_DIRECTORY_ENTRY.EXPORT);
         const export_directory_va = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+        const export_directory_size = if (self.is_64bit) self.nt_headers_64.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size else self.nt_headers_32.?.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
 
         if (export_directory_va == 0) return;
 
@@ -279,38 +283,58 @@ pub const PEParser = struct {
 
         const export_directory = try self.reader.readStruct(types.IMAGE_EXPORT_DIRECTORY);
 
-        const export_name_address = try self.rvaToFileOffset(export_directory.Name);
-        try self.reader.context.seekTo(export_name_address);
-        const export_name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+        const dll_name_address = try self.rvaToFileOffset(export_directory.Name);
+        try self.reader.context.seekTo(dll_name_address);
+        const dll_name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
 
         const num_of_functions = export_directory.NumberOfFunctions;
 
-        const functions_address = try self.rvaToFileOffset(export_directory.AddressOfFunctions);
-        const addresses = try self.allocator.alloc(u32, num_of_functions);
-        defer self.allocator.free(addresses);
-        try self.reader.context.seekTo(functions_address);
+        const export_address_table_address = try self.rvaToFileOffset(export_directory.AddressOfFunctions);
+        const export_address_table = try self.allocator.alloc(types.EXPORT_ADDRESS_TABLE_ENTRY, num_of_functions);
+        defer self.allocator.free(export_address_table);
         for (0..num_of_functions) |i| {
-            addresses[i] = try self.reader.readInt(u32, .little);
+            try self.reader.context.seekTo(export_address_table_address + i * 4);
+
+            const rva = try self.reader.readInt(u32, .little);
+            if (rva >= export_directory_va and rva < export_directory_va + export_directory_size) {
+                const address = try self.rvaToFileOffset(rva);
+                try self.reader.context.seekTo(address);
+                const forwarder = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
+                export_address_table[i] = .{ .Forwarder = forwarder };
+            } else {
+                export_address_table[i] = .{ .ExportRva = rva };
+            }
         }
 
-        const names_address = try self.rvaToFileOffset(export_directory.AddressOfNames);
-        const names = try self.allocator.alloc(struct { Name: []const u8, Rva: u32 }, num_of_functions);
-        defer self.allocator.free(names);
+        const export_name_pointer_table_address = try self.rvaToFileOffset(export_directory.AddressOfNames);
+        const export_name_pointer_table = try self.allocator.alloc(struct { Name: []const u8, Rva: u32 }, num_of_functions);
+        defer self.allocator.free(export_name_pointer_table);
         for (0..num_of_functions) |i| {
-            try self.reader.context.seekTo(names_address + i * 4);
+            try self.reader.context.seekTo(export_name_pointer_table_address + i * 4);
+
             const name_rva = try self.reader.readInt(u32, .little);
             const name_address = try self.rvaToFileOffset(name_rva);
             try self.reader.context.seekTo(name_address);
             const name = try self.reader.readUntilDelimiterAlloc(self.allocator, 0, std.math.maxInt(u32));
-            names[i] = .{ .Name = name, .Rva = name_rva };
+            export_name_pointer_table[i] = .{ .Name = name, .Rva = name_rva };
+        }
+
+        const export_ordinal_table_address = try self.rvaToFileOffset(export_directory.AddressOfNameOrdinals);
+        const export_ordinal_table = try self.allocator.alloc(u16, num_of_functions);
+        defer self.allocator.free(export_ordinal_table);
+        try self.reader.context.seekTo(export_ordinal_table_address);
+        for (0..num_of_functions) |i| {
+            const ordinal = try self.reader.readInt(u16, .little);
+            export_ordinal_table[i] = ordinal + @as(u16, @intCast(export_directory.Base));
         }
 
         const exported_functions = try self.allocator.alloc(types.EXPORTED_FUNCTION, num_of_functions);
         for (0..num_of_functions) |i| {
             exported_functions[i] = .{
-                .Rva = addresses[i],
-                .NameRva = names[i].Rva,
-                .Name = names[i].Name,
+                .Anonymous = export_address_table[i],
+                .NameRva = export_name_pointer_table[i].Rva,
+                .Name = export_name_pointer_table[i].Name,
+                .Ordinal = export_ordinal_table[i],
             };
         }
 
@@ -320,7 +344,7 @@ pub const PEParser = struct {
             .MajorVersion = export_directory.MajorVersion,
             .MinorVersion = export_directory.MinorVersion,
             .NameRva = export_directory.Name,
-            .Name = export_name,
+            .Name = dll_name,
             .Base = export_directory.Base,
             .NumberOfFunctions = export_directory.NumberOfFunctions,
             .NumberOfNames = export_directory.NumberOfNames,
@@ -643,9 +667,12 @@ pub const PEParser = struct {
         try writer.print("  NameOrdinals RVA: 0x{X}\n", .{export_directory.AddressOfNameOrdinals});
 
         try writer.writeAll("  Exported Functions:\n\n");
-        for (export_directory.Functions, 0..) |function, i| {
-            try writer.print("      Ordinal: 0x{X}\n", .{export_directory.Base + i});
-            try writer.print("      Function RVA: 0x{X}\n", .{function.Rva});
+        for (export_directory.Functions) |function| {
+            try writer.print("      Ordinal: 0x{X}\n", .{function.Ordinal});
+            switch (function.Anonymous) {
+                .Forwarder => |forwarder| try writer.print("      Forwarder: {s}\n", .{forwarder}),
+                .ExportRva => |rva| try writer.print("      Function RVA: 0x{X}\n", .{rva}),
+            }
             try writer.print("      Name RVA: 0x{X}\n", .{function.NameRva});
             try writer.print("      Name: {s}\n\n", .{function.Name});
         }
