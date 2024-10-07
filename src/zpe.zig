@@ -625,7 +625,7 @@ pub const PEParser = struct {
 
             var buf: [60]u8 = undefined;
             const time_date_string = try datetime.Datetime.fromSeconds(@floatFromInt(imported_dll.TimeDateStamp)).formatHttpBuf(&buf);
-            try writer.print("  TimeDateStamp: 0x{X} ({s})\n", .{ imported_dll.TimeDateStamp, time_date_string });
+            try writer.print("      TimeDateStamp: 0x{X} ({s})\n", .{ imported_dll.TimeDateStamp, time_date_string });
 
             try writer.print("      ForwarderChain: 0x{x}\n", .{imported_dll.ForwarderChain});
             try writer.print("      Bound: {}\n", .{imported_dll.TimeDateStamp != 0});
