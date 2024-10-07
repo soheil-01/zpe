@@ -11,6 +11,7 @@ ZPE can parse and display the following components of a PE file:
 - NT Headers
 - Section Headers
 - Import Directory
+- Export Directory
 - Base Relocation Directory
 
 ## Usage as a Command-Line Tool
@@ -33,6 +34,7 @@ The Available command-line options are:
 - `--print-nt-headers`: Print the contents of the NT headers.
 - `--print-section-headers`: Print the contents of the section headers.
 - `--print-import-directory`: Print the contents of the import directory.
+- `--print-export-directory`: Print the contents of the export directory.
 - `--print-base-relocation-directory`: Print the contents of the base relocation directory.
 
 ## Usage as a Library
