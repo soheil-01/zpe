@@ -7,7 +7,7 @@ pub const PEParser = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    reader: std.fs.File.Reader,
+    reader: std.io.FixedBufferStream([]const u8).Reader,
     dos_header: ?types.IMAGE_DOS_HEADER = null,
     rich_header_entries: ?[]types.RICH_HEADER_ENTRY = null,
     nt_headers_32: ?types.IMAGE_NT_HEADERS32 = null,
@@ -18,12 +18,9 @@ pub const PEParser = struct {
     export_directory: ?types.EXPORT_DIRECTORY = null,
     base_relocation_directory: ?[]types.BASE_RELOCATION_BLOCK = null,
 
-    // TODO: file path or file content
-    pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
-
-        // TODO: keeping the file open until the parser is deinitialized or creating a copy of the file content
-        const file = try std.fs.cwd().openFile(file_path, .{});
-        const reader = file.reader();
+    pub fn init(allocator: std.mem.Allocator, file_content: []const u8) !Self {
+        var fb = std.io.fixedBufferStream(file_content);
+        const reader = fb.reader();
 
         return .{
             .allocator = allocator,
@@ -32,7 +29,6 @@ pub const PEParser = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.reader.context.close();
         if (self.rich_header_entries) |rich_header_entries| self.allocator.free(rich_header_entries);
         if (self.section_headers) |section_headers| self.allocator.free(section_headers);
 
