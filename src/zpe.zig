@@ -18,10 +18,7 @@ pub const PEParser = struct {
     export_directory: ?types.EXPORT_DIRECTORY = null,
     base_relocation_directory: ?[]types.BASE_RELOCATION_BLOCK = null,
 
-    // TODO: file path or file content
     pub fn init(allocator: std.mem.Allocator, file_path: []const u8) !Self {
-
-        // TODO: keeping the file open until the parser is deinitialized or creating a copy of the file content
         const file = try std.fs.cwd().openFile(file_path, .{});
         const reader = file.reader();
 
@@ -105,7 +102,6 @@ pub const PEParser = struct {
 
         const rich_header_payload = buffer[rich_header_start_index + 16 .. rich_id_index];
 
-        // TODO: is it required to check the entries length?
         assert(rich_header_payload.len % 8 == 0);
 
         var rich_header_entries = try self.allocator.alloc(types.RICH_HEADER_ENTRY, rich_header_payload.len / 8);
