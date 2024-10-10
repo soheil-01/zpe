@@ -315,22 +315,26 @@ pub const PEParser = struct {
             export_name_pointer_table[i] = .{ .Name = name, .Rva = name_rva };
         }
 
+        const ordinal_base: u16 = @intCast(export_directory.Base);
+
         const export_ordinal_table_address = try self.rvaToFileOffset(export_directory.AddressOfNameOrdinals);
         const export_ordinal_table = try self.allocator.alloc(u16, num_of_functions);
         defer self.allocator.free(export_ordinal_table);
         try self.reader.context.seekTo(export_ordinal_table_address);
         for (0..num_of_functions) |i| {
-            const ordinal = try self.reader.readInt(u16, .little);
-            export_ordinal_table[i] = ordinal + @as(u16, @intCast(export_directory.Base));
+            export_ordinal_table[i] = try self.reader.readInt(u16, .little);
         }
 
         const exported_functions = try self.allocator.alloc(types.EXPORTED_FUNCTION, num_of_functions);
         for (0..num_of_functions) |i| {
+            const ordinal = export_ordinal_table[i];
+            const biased_ordinal = ordinal + ordinal_base;
+
             exported_functions[i] = .{
-                .Anonymous = export_address_table[i],
+                .Anonymous = export_address_table[ordinal],
                 .NameRva = export_name_pointer_table[i].Rva,
                 .Name = export_name_pointer_table[i].Name,
-                .Ordinal = export_ordinal_table[i],
+                .Ordinal = biased_ordinal,
             };
         }
 
